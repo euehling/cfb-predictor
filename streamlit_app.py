@@ -88,6 +88,18 @@ def render():
             cols[3].metric(label, f"{abs(diff):.2f} pts RMSE", delta=f"{diff:+.2f}")
         st.divider()
 
+    # ---- This week's schedule ----
+    season, week, pred_path = latest_week(DATA_DIR)
+    preds = pd.read_csv(pred_path)
+
+    st.subheader(f"Week {week} Schedule")
+    sched_cols = [c for c in ["home_team", "away_team", "start_date", "vegas_spread"] if c in preds.columns]
+    schedule = preds[sched_cols].copy()
+    if "start_date" in schedule.columns:
+        schedule = schedule.sort_values("start_date")
+    st.dataframe(styled_table(schedule), width='stretch', hide_index=True)
+    st.divider()
+
     # ---- Weekly RMSE trend ----
     weekly = compute_weekly_rmse(graded_files)
     if len(weekly) >= 1:
@@ -108,18 +120,6 @@ def render():
         ).properties(height=320).configure_view(strokeWidth=0).configure(background="transparent")
 
         st.altair_chart(chart, width='stretch')
-        st.divider()
-
-    # ---- This week's schedule ----
-    season, week, pred_path = latest_week(DATA_DIR)
-    preds = pd.read_csv(pred_path)
-
-    st.subheader(f"Week {week} Schedule")
-    sched_cols = [c for c in ["home_team", "away_team", "start_date", "vegas_spread"] if c in preds.columns]
-    schedule = preds[sched_cols].copy()
-    if "start_date" in schedule.columns:
-        schedule = schedule.sort_values("start_date")
-    st.dataframe(styled_table(schedule), width='stretch', hide_index=True)
 
 
 render()

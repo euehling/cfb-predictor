@@ -131,6 +131,18 @@ p, div, span, label {
 .edge-pos { color: #7fceac; }
 .edge-neg { color: #e08585; }
 
+/* Multiselect filter tags — override Streamlit's default red */
+[data-baseweb="tag"] {
+    background-color: rgba(167, 139, 250, 0.18) !important;
+    border: 1px solid rgba(167, 139, 250, 0.5) !important;
+}
+[data-baseweb="tag"] span {
+    color: #c4b5fd !important;
+}
+[data-baseweb="tag"] svg {
+    fill: #c4b5fd !important;
+}
+
 hr {
     border-color: rgba(255,255,255,0.08) !important;
 }
