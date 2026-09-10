@@ -1,20 +1,17 @@
 """
-Page 1 — Schedule. Season-long KPIs, the week's schedule, and a live
-results table that re-pulls from CFBD on every refresh (cached briefly
-so rapid refreshes don't hammer the API).
+Page 1 — Schedule. Season-long KPIs, the current week's schedule, and a
+line chart tracking model vs. Vegas RMSE week over week.
 """
 
 import os
 import sys
 import pandas as pd
 import numpy as np
+import altair as alt
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dashboard_common import (
-    inject_css, discover_files, latest_week, styled_table, DATA_DIR,
-    get_cfbd_api_key,
-)
+from dashboard_common import inject_css, discover_files, latest_week, styled_table, DATA_DIR
 
 st.set_page_config(page_title="CFB Predictor — Schedule", layout="wide", page_icon="🏈")
 inject_css()
@@ -46,19 +43,25 @@ def compute_season_summary(graded_files: list) -> dict:
     return summary
 
 
-@st.cache_data(ttl=300)
-def pull_live_scores(season: int, game_ids: tuple):
-    """Live-pulls current scores from CFBD for the given game_ids.
-    Cached 5 minutes so repeated manual refreshes in a short window don't
-    re-hit the API unnecessarily, while staying fresh across a normal
-    day of checking in."""
-    from cfbd_pull import CFBDClient
-    api_key = get_cfbd_api_key()
-    client = CFBDClient(api_key=api_key)
-    games = client.get_games(season)
-    rows = [{"game_id": g.id, "actual_home_points": g.home_points, "actual_away_points": g.away_points}
-            for g in games if g.id in game_ids]
-    return pd.DataFrame(rows)
+def compute_weekly_rmse(graded_files: list) -> pd.DataFrame:
+    """One row per graded week: model RMSE and Vegas RMSE for that week
+    specifically (not cumulative), for the trend chart."""
+    rows = []
+    for season, week, path in graded_files:
+        df = pd.read_csv(path)
+        model_rmse = np.sqrt((df["margin_error"] ** 2).mean())
+        row = {"week_label": f"{season} Wk{week}", "season": season, "week": week, "Model": model_rmse}
+
+        if "vegas_implied_margin" in df.columns:
+            has_line = df["vegas_implied_margin"].notna()
+            if has_line.sum() > 0:
+                vegas_error = df.loc[has_line, "vegas_implied_margin"] - df.loc[has_line, "actual_margin"]
+                row["Vegas"] = np.sqrt((vegas_error ** 2).mean())
+
+        rows.append(row)
+
+    result = pd.DataFrame(rows).sort_values(["season", "week"])
+    return result
 
 
 def render():
@@ -85,6 +88,29 @@ def render():
             cols[3].metric(label, f"{abs(diff):.2f} pts RMSE", delta=f"{diff:+.2f}")
         st.divider()
 
+    # ---- Weekly RMSE trend ----
+    weekly = compute_weekly_rmse(graded_files)
+    if len(weekly) >= 1:
+        st.subheader("RMSE by week: Model vs. Vegas")
+        value_cols = [c for c in ["Model", "Vegas"] if c in weekly.columns]
+        long_df = weekly.melt(id_vars=["week_label", "season", "week"], value_vars=value_cols,
+                               var_name="Series", value_name="RMSE")
+
+        chart = alt.Chart(long_df).mark_line(point=True).encode(
+            x=alt.X("week_label:N", sort=None, title=None,
+                    axis=alt.Axis(labelColor="#b8b8c2", labelFontSize=11)),
+            y=alt.Y("RMSE:Q", title="Margin RMSE (pts)",
+                    axis=alt.Axis(labelColor="#b8b8c2", titleColor="#9db4f0")),
+            color=alt.Color("Series:N", scale=alt.Scale(
+                domain=["Model", "Vegas"], range=["#7fceac", "#9db4f0"]
+            ), legend=alt.Legend(title=None, labelColor="#e8e8ec")),
+            tooltip=["week_label", "Series", alt.Tooltip("RMSE:Q", format=".2f")],
+        ).properties(height=320).configure_view(strokeWidth=0).configure(background="transparent")
+
+        st.altair_chart(chart, width='stretch')
+        st.divider()
+
+    # ---- This week's schedule ----
     season, week, pred_path = latest_week(DATA_DIR)
     preds = pd.read_csv(pred_path)
 
@@ -94,32 +120,6 @@ def render():
     if "start_date" in schedule.columns:
         schedule = schedule.sort_values("start_date")
     st.dataframe(styled_table(schedule), width='stretch', hide_index=True)
-
-    st.subheader("Live Results")
-    st.caption("Refresh the page any time to pull current scores. Updates as games finish.")
-
-    if "game_id" not in preds.columns:
-        st.info("No game_id column found — can't pull live scores for this file.")
-        return
-
-    api_key = get_cfbd_api_key()
-    if not api_key:
-        st.warning("No CFBD_API_KEY found (set it as an env var locally, or a Streamlit secret when deployed) — can't pull live scores.")
-        return
-
-    try:
-        live = pull_live_scores(season, tuple(preds["game_id"].tolist()))
-    except Exception as e:
-        st.error(f"Couldn't pull live scores: {e}")
-        return
-
-    merged = preds.merge(live, on="game_id", how="left")
-    merged["spread"] = merged["actual_home_points"] - merged["actual_away_points"]
-
-    live_cols = [c for c in ["home_team", "away_team", "actual_home_points", "actual_away_points", "spread"]
-                 if c in merged.columns]
-    live_display = merged[live_cols]
-    st.dataframe(styled_table(live_display, edge_cols=[]), width='stretch', hide_index=True)
 
 
 render()
